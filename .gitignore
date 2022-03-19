@@ -1,6 +1,8 @@
 # user modified
-practice_Project/*
+test\ & \ learn/
 output
+.DS_Store
+src/Music/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
@@ -128,6 +130,8 @@ venv.bak/
 .mypy_cache/
 .dmypy.json
 dmypy.json
+# node_modules
+# package-lock.json
 
 # Pyre type checker
 .pyre/

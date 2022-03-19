@@ -1,28 +1,51 @@
 from mido import MidiFile
-from math import gcd
 import Constant as C
 import numpy as np
 
-import Utility 
+import Utility
 
 
 class ProcessedMIDI:
+    # only ancestors get this, set to None for offsprings
     OG_Mido = MidiFile()
     noteSeq = np.array([])
     tempo = 500000  # Default value
     minLengthInTicks = 0
-    numberOfMinLength = 0
     numberOfNotes = 0
-    lowestNote = 109
-    highestNote = 20
+    lowestNote = 1
+    highestNote = 29
+    totalDuration = 0  # aka numberOfMinLength
+    minSegment = 0
 
-    def __init__(self, mid, preprocess=True):
-        self.OG_Mido = mid
-        # self.checkMIDIValidity()
-
-        if preprocess:
+    # two type
+    # __init__( mid, None )
+    # __init__( None, inputNoteSeq )
+    def __init__(self, mid, inputProcessedMIDI=None):
+        # construct with a real midi file, for ancestors only
+        if inputProcessedMIDI == None:
+            self.OG_Mido = mid
             self.exploreMIDI()
             self.parseMIDI()
+        # constructor for offspring, will construct based on note seq
+        else:
+            self.OG_Mido = None
+            self.updateFieldVariable(inputProcessedMIDI)
+
+    def updateFieldVariable(self, inputProcessedMIDI=None):
+        if inputProcessedMIDI is None:
+            inputProcessedMIDI = self
+        self.noteSeq = inputProcessedMIDI.noteSeq
+        self.tempo = inputProcessedMIDI.tempo
+        self.ticks_per_beat = inputProcessedMIDI.ticks_per_beat
+        self.minLengthInTicks = inputProcessedMIDI.minLengthInTicks
+        self.numberOfNotes = inputProcessedMIDI.noteSeq[C.PITCHINDEX].shape[0]
+        self.lowestNote = inputProcessedMIDI.noteSeq[C.PITCHINDEX][inputProcessedMIDI.noteSeq[C.PITCHINDEX] > 0].min(
+        )
+        self.highestNote = np.max(inputProcessedMIDI.noteSeq[C.PITCHINDEX])
+        self.totalDuration = np.sum(
+            inputProcessedMIDI.noteSeq[C.DURATIONINDEX])
+        # self.minSegment = min(int(self.totalDuration / 16), 4 )
+        self.minSegment = int(self.totalDuration / 16)
 
     def exploreMIDI(self):
         timeSet = []  # store possible periods
@@ -42,15 +65,15 @@ class ProcessedMIDI:
                     timeSet.append(event.time)
                     totalTime += event.time
 
-                    self.lowestNote = event.note if event.note < self.lowestNote else self.lowestNote
-                    self.highestNote = event.note if event.note > self.highestNote else self.highestNote
-
         # drop first event's delta time
         timeSet.pop(0)
-        self.lowestNote = Utility.value2Pitch( Utility.recodePitch( self.lowestNote ) )
-        self.highestNote = Utility.value2Pitch( Utility.recodePitch( self.highestNote ) )
-        self.minLengthInTicks = gcd(*timeSet)
-        self.numberOfMinLength = totalTime//self.minLengthInTicks
+        # self.lowestNote_value = Utility.value2Pitch(
+        #     Utility.recodePitch(self.lowestNote))
+        # self.highestNote_value = Utility.value2Pitch(
+        #     Utility.recodePitch(self.highestNote))
+        self.minLengthInTicks = np.gcd.reduce(timeSet)
+        self.ticks_per_beat = self.OG_Mido.ticks_per_beat
+        # self.numberOfMinLength = totalTime//self.minLengthInTicks
 
     def parseMIDI(self):
 
@@ -58,7 +81,7 @@ class ProcessedMIDI:
         # OFFSET = 1 - self.lowestNote
 
         # initialize
-        self.noteSeq = np.zeros((5, self.numberOfNotes))
+        self.noteSeq = np.zeros((7, self.numberOfNotes))
         curNoteIndex = 0
 
         for track in (self.OG_Mido.tracks):
@@ -88,15 +111,8 @@ class ProcessedMIDI:
                             # duration
                             duration = int(deltaTime/self.minLengthInTicks)
                             # ! ATTEMPTS : convert pitch in other rule
-                            """                           
-                               range: c2 to c6
-                               c2 in midi: 36 -> 1
-                               c6 in midi: 84 -> 29
-                               formula: 
-                                T(n) = 7*(n//12-3) + stepDiff2Interval(n%12)
-                            """
                             self.noteSeq[C.PITCHINDEX,
-                                         curNoteIndex] = Utility.recodePitch( firstEvent.note )
+                                         curNoteIndex] = Utility.recodePitch(firstEvent.note)
                             self.noteSeq[C.DURATIONINDEX,
                                          curNoteIndex] = duration
                             curNoteIndex += 1
@@ -120,9 +136,10 @@ class ProcessedMIDI:
                         = abs(nextNextPitch - curPitch)
                     self.noteSeq[C.INTERVALINDEX][i+1]\
                         = abs(nextNextPitch - curPitch)
+                elif nextPitch == 0 and i+2 == self.numberOfNotes:
+                    self.noteSeq[C.INTERVALINDEX][i] = 0
 
                 else:
-                    # TODO solve same interval with different step difference
                     self.noteSeq[C.INTERVALINDEX][i] = abs(
                         nextPitch - curPitch)
 
@@ -135,25 +152,84 @@ class ProcessedMIDI:
                         if preDuration < 8:
                             if self.noteSeq[C.PITCHINDEX][i-1] != 0 or preDuration <= 4:
                                 self.noteSeq[C.ACCUMULATIVEINDEX][i] += self.noteSeq[C.ACCUMULATIVEINDEX][i-1]
-        self.noteSeq = self.noteSeq.astype(int)
+        self.totalDuration = int(np.sum(
+            self.noteSeq[C.DURATIONINDEX]))
+        # self.minSegment = min(int(self.totalDuration / 16), 4)
+        self.minSegment = int(self.totalDuration / 16)
 
-    def printPeriod(self):
+        self.noteSeq[C.PITCHINDEX] = Utility.allignCenterC(self.noteSeq[C.PITCHINDEX])
+
+        self.lowestNote = self.noteSeq[C.PITCHINDEX][self.noteSeq[C.PITCHINDEX] > 0].min(
+        )
+        self.highestNote = np.max(self.noteSeq[C.PITCHINDEX])
+
+        # duration_median = np.median(self.noteSeq[C.DURATIONINDEX])
+        # if duration_median < C.DESIRE_AVG_DURATION:
+        #     self.noteSeq[C.DURATIONINDEX] = ( self.noteSeq[C.DURATIONINDEX] * C.DESIRE_AVG_DURATION//duration_median).astype(int)
+        # if (C.DESIRE_AVG_DURATION//duration_median).astype(int) != 0:
+        #     self.minLengthInTicks /= (C.DESIRE_AVG_DURATION//duration_median).astype(int)
+
+    def printMIDI(self):
 
         print("minLengthInTicks: " + str(self.minLengthInTicks))
-        print("numberOfMinLength: " + str(self.numberOfMinLength))
+        # print("numberOfMinLength: " + str(self.numberOfMinLength))
+        print("numberOfNotes: " + str(self.numberOfNotes))
+        print("totalDuration: " + str(self.totalDuration))
         print("lowestNote: " + str(self.lowestNote))
         print("highestNote: " + str(self.highestNote))
-
+        print("tempo: " + str(self.tempo))
 
         print("Pitch Sequence:")
-        pitchInName = [ Utility.value2Pitch(i) for i in self.noteSeq[C.PITCHINDEX] ]
+        pitchInName = [Utility.value2Pitch(i)
+                       for i in self.noteSeq[C.PITCHINDEX]]
         Utility.formattedPrint(pitchInName)
         # Utility.formattedPrint(self.noteSeq[C.PITCHINDEX])
         print("Duration Sequence:")
-        Utility.formattedPrint(self.noteSeq[C.DURATIONINDEX])
+        Utility.formattedPrint(self.noteSeq[C.DURATIONINDEX].astype(int))
         print("Interval Sequence:")
         Utility.formattedPrint(self.noteSeq[C.INTERVALINDEX])
         print("Rest Sequence:")
-        Utility.formattedPrint(self.noteSeq[C.RESTINDEX])
+        Utility.formattedPrint(self.noteSeq[C.RESTINDEX].astype(int))
         print("Accumulative Beat Sequence:")
-        Utility.formattedPrint(self.noteSeq[C.ACCUMULATIVEINDEX])
+        Utility.formattedPrint(self.noteSeq[C.ACCUMULATIVEINDEX].astype(int))
+
+
+def expandElementarySequence(elementarySequence):
+    # assert( len(pitchSeq) == len(durationSeq), "different length between pitchSeq & durationSeq")
+    numberOfNotes = elementarySequence.shape[1]
+    noteSeq = np.zeros((7, numberOfNotes))
+    noteSeq[C.PITCHINDEX] = elementarySequence[0]
+    noteSeq[C.DURATIONINDEX] = elementarySequence[1]
+
+    # add pitch interval sequence & temporary rest sequence encoding:
+    # by the current encoding method, same note & (note,break) are both been consider as interval = 0
+    for i, curPitch in enumerate(noteSeq[C.PITCHINDEX][:-1]):
+        nextPitch = noteSeq[C.PITCHINDEX][i+1]
+        # cutpoint might appear between each break
+        if curPitch == 0:
+            noteSeq[C.RESTINDEX][i] = noteSeq[C.DURATIONINDEX][i]
+        elif nextPitch == 0 and i + 2 < numberOfNotes:
+            nextNextPitch = noteSeq[C.PITCHINDEX][i+2]
+            noteSeq[C.RESTINDEX][i] = noteSeq[C.DURATIONINDEX][i+1]
+            noteSeq[C.INTERVALINDEX][i]\
+                = abs(nextNextPitch - curPitch)
+            noteSeq[C.INTERVALINDEX][i+1]\
+                = abs(nextNextPitch - curPitch)
+        elif nextPitch == 0 and i+2 == numberOfNotes:
+            noteSeq[C.INTERVALINDEX][i] = 0
+
+        else:
+            noteSeq[C.INTERVALINDEX][i] = abs(
+                nextPitch - curPitch)
+
+    # accumulative beat sequence
+    for i, curDuration in enumerate(noteSeq[C.DURATIONINDEX][:-1]):
+        noteSeq[C.ACCUMULATIVEINDEX][i] = curDuration
+        if i != 0:
+            preDuration = noteSeq[C.DURATIONINDEX][i-1]
+            if noteSeq[C.ACCUMULATIVEINDEX][i-1] % C.BeatInMeasure != 0:
+                if preDuration < 8:
+                    if noteSeq[C.PITCHINDEX][i-1] != 0 or preDuration <= 4:
+                        noteSeq[C.ACCUMULATIVEINDEX][i] += noteSeq[C.ACCUMULATIVEINDEX][i-1]
+
+    return noteSeq
